@@ -14,6 +14,7 @@ namespace TcpEcho
         {
             var messageSize = args.FirstOrDefault();
 
+            var encoding = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
             var clientSocket = new Socket(SocketType.Stream, ProtocolType.Tcp);
 
             Console.WriteLine("Connecting to port 8087");
@@ -22,27 +23,37 @@ namespace TcpEcho
 
             if (messageSize == null)
             {
-                var buffer = new byte[1];
                 while (true)
                 {
-
-                    buffer[0] = (byte)Console.Read();
-                    await clientSocket.SendAsync(new ArraySegment<byte>(buffer, 0, 1), SocketFlags.None);
+                    var line = Console.ReadLine();
+                    var message = FrameMessage(line);
+                    await clientSocket.SendAsync(message, SocketFlags.None);
                 }
             }
             else
             {
                 var count = int.Parse(messageSize);
-                var buffer = Encoding.ASCII.GetBytes(new string('a', count) + Environment.NewLine);
+                var line = new string('a', count);
+                var message = FrameMessage(line);
                 var stopwatch = new Stopwatch();
                 stopwatch.Start();
                 for (int i = 0; i < 1_000_000; i++)
                 {
-                    await clientSocket.SendAsync(new ArraySegment<byte>(buffer), SocketFlags.None);
+                    await clientSocket.SendAsync(message, SocketFlags.None);
                 }
                 stopwatch.Stop();
 
                 Console.WriteLine($"Elapsed {stopwatch.Elapsed.TotalSeconds:F} sec.");
+            }
+
+            ArraySegment<byte>[] FrameMessage(string line)
+            {
+                var buffer = encoding.GetBytes(line);
+                var lengthPrefix = BitConverter.GetBytes((ushort)buffer.Length);
+                return new ArraySegment<byte>[] {
+                    new ArraySegment<byte>(lengthPrefix),
+                    new ArraySegment<byte>(buffer)
+                };
             }
         }
     }

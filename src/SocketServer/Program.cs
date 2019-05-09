@@ -3,6 +3,7 @@ using System.IO;
 using System.Linq;
 using System.Net;
 using System.Net.Sockets;
+using System.Text;
 using System.Threading.Tasks;
 
 namespace TcpEcho
@@ -25,20 +26,30 @@ namespace TcpEcho
             while (true)
             {
                 var socket = await listenSocket.AcceptAsync();
-                _ = ProcessLinesAsync(socket);
+                _ = Task.Run(() => ProcessLines(socket));
             }
         }
 
-        private static async Task ProcessLinesAsync(Socket socket)
+        private static void ProcessLines(Socket socket)
         {
             Console.WriteLine($"[{socket.RemoteEndPoint}]: connected");
 
+            var encoding = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
             using (var stream = new NetworkStream(socket))
-            using (var reader = new StreamReader(stream))
+            using (var reader = new BinaryReader(stream))
             {
-                while (!reader.EndOfStream)
+                try
                 {
-                    ProcessLine(socket, await reader.ReadLineAsync());
+                    while (true)
+                    {
+                        var lengthPrefix = reader.ReadUInt16();
+                        var lineBytes = reader.ReadBytes(lengthPrefix);
+                        var line = encoding.GetString(lineBytes);
+                        ProcessLine(socket, line);
+                    }
+                }
+                catch (EndOfStreamException)
+                {
                 }
             }
 

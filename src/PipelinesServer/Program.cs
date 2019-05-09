@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Buffers;
+using System.Buffers.Binary;
 using System.IO.Pipelines;
 using System.Linq;
 using System.Net;
@@ -83,33 +84,35 @@ namespace TcpEcho
             writer.Complete();
         }
 
+        private const int lengthPrefixSize = 2; // number of bytes in the length prefix
+        private static ushort ParseLengthPrefix(ReadOnlySpan<byte> buffer) => BinaryPrimitives.ReadUInt16LittleEndian(buffer);
+
         private static async Task ReadPipeAsync(Socket socket, PipeReader reader)
         {
+            byte[] lengthPrefixBuffer = new byte[lengthPrefixSize];
+
             while (true)
             {
                 ReadResult result = await reader.ReadAsync();
 
                 ReadOnlySequence<byte> buffer = result.Buffer;
-                SequencePosition? position = null;
 
-                do
+                while (buffer.Length > lengthPrefixSize)
                 {
-                    // Find the EOL
-                    position = buffer.PositionOf((byte)'\n');
+                    // Read and parse the length prefix
+                    buffer.Slice(0, lengthPrefixSize).CopyTo(lengthPrefixBuffer);
+                    var lengthPrefix = ParseLengthPrefix(lengthPrefixBuffer);
 
-                    if (position != null)
-                    {
-                        var line = buffer.Slice(0, position.Value);
-                        ProcessLine(socket, line);
+                    // If we haven't read the entire packet yet, then wait.
+                    if (buffer.Length < lengthPrefixSize + lengthPrefix)
+                        break;
 
-                        // This is equivalent to position + 1
-                        var next = buffer.GetPosition(1, position.Value);
+                    // Read the data packet
+                    var line = buffer.Slice(lengthPrefixSize, lengthPrefix);
+                    ProcessLine(socket, line);
 
-                        // Skip what we've already processed including \n
-                        buffer = buffer.Slice(next);
-                    }
+                    buffer = buffer.Slice(lengthPrefixSize + lengthPrefix);
                 }
-                while (position != null);
 
                 // We sliced the buffer until no more data could be processed
                 // Tell the PipeReader how much we consumed and how much we left to process
