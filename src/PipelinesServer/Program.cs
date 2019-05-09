@@ -87,9 +87,19 @@ namespace TcpEcho
         private const int lengthPrefixSize = 2; // number of bytes in the length prefix
         private static ushort ParseLengthPrefix(ReadOnlySpan<byte> buffer) => BinaryPrimitives.ReadUInt16LittleEndian(buffer);
 
+        private static ushort ParseLengthPrefix(in ReadOnlySequence<byte> buffer)
+        {
+            if (buffer.First.Length >= lengthPrefixSize)
+                return ParseLengthPrefix(buffer.First.Span.Slice(0, lengthPrefixSize));
+
+            Span<byte> lengthPrefixBytes = stackalloc byte[lengthPrefixSize];
+            buffer.Slice(0, lengthPrefixSize).CopyTo(lengthPrefixBytes);
+            return ParseLengthPrefix(lengthPrefixBytes);
+        }
+
         private static async Task ReadPipeAsync(Socket socket, PipeReader reader)
         {
-            byte[] lengthPrefixBuffer = new byte[lengthPrefixSize];
+            ushort? lengthPrefix = null;
 
             while (true)
             {
@@ -97,21 +107,29 @@ namespace TcpEcho
 
                 ReadOnlySequence<byte> buffer = result.Buffer;
 
-                while (buffer.Length > lengthPrefixSize)
+                while (true)
                 {
-                    // Read and parse the length prefix
-                    buffer.Slice(0, lengthPrefixSize).CopyTo(lengthPrefixBuffer);
-                    var lengthPrefix = ParseLengthPrefix(lengthPrefixBuffer);
+                    if (lengthPrefix == null)
+                    {
+                        // If we don't have enough for the length prefix, then wait for more data.
+                        if (buffer.Length < lengthPrefixSize)
+                            break;
+
+                        // Read and parse the length prefix
+                        lengthPrefix = ParseLengthPrefix(buffer);
+                        buffer = buffer.Slice(lengthPrefixSize);
+                    }
 
                     // If we haven't read the entire packet yet, then wait.
-                    if (buffer.Length < lengthPrefixSize + lengthPrefix)
+                    if (buffer.Length < lengthPrefix.Value)
                         break;
 
                     // Read the data packet
-                    var line = buffer.Slice(lengthPrefixSize, lengthPrefix);
+                    var line = buffer.Slice(0, lengthPrefix.Value);
                     ProcessLine(socket, line);
 
-                    buffer = buffer.Slice(lengthPrefixSize + lengthPrefix);
+                    buffer = buffer.Slice(lengthPrefix.Value);
+                    lengthPrefix = null;
                 }
 
                 // We sliced the buffer until no more data could be processed
